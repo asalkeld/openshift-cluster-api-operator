@@ -21,33 +21,29 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
+	infrav1 "sigs.k8s.io/cluster-api-provider-aws/api/v1alpha3"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	webappv1 "github.com/cloud-team-poc/openshift-cluster-api-operator/api/v1"
 )
 
-// GuestbookReconciler reconciles a Guestbook object
-type GuestbookReconciler struct {
+// AWSClusterReconciler reconciles a AWSCluster object
+type AWSClusterReconciler struct {
 	client.Client
 	Log    logr.Logger
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=webapp.my.domain,resources=guestbooks,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=webapp.my.domain,resources=guestbooks/status,verbs=get;update;patch
-
-func (r *GuestbookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+func (r *AWSClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()
-	_ = r.Log.WithValues("guestbook", req.NamespacedName)
+	_ = r.Log.WithValues("AWSCluster", req.NamespacedName)
 
 	// your logic here
 
 	return ctrl.Result{}, nil
 }
 
-func (r *GuestbookReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *AWSClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&webappv1.Guestbook{}).
+		For(&infrav1.AWSCluster{}).
 		Complete(r)
 }
