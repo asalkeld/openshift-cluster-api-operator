@@ -1,0 +1,7 @@
+apiVersion: capi.openshift.io/v1
+kind: CAPIDeployment
+metadata:
+  name: capideployment-sample
+spec:
+  # Add fields here
+  foo: bar

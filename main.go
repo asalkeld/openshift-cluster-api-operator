@@ -19,8 +19,12 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
 
+	capiv1 "github.com/cloud-team-poc/openshift-cluster-api-operator/api/v1"
 	"github.com/cloud-team-poc/openshift-cluster-api-operator/controllers"
+
+	// configv1 "github.com/openshift/api/config/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
@@ -30,13 +34,16 @@ import (
 )
 
 var (
-	scheme   = runtime.NewScheme()
-	setupLog = ctrl.Log.WithName("setup")
+	scheme     = runtime.NewScheme()
+	setupLog   = ctrl.Log.WithName("setup")
+	syncPeriod = 5 * time.Minute
 )
 
 func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
 
+	_ = capiv1.AddToScheme(scheme)
+	// _ = configv1.AddToScheme(scheme)
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -57,6 +64,7 @@ func main() {
 		Port:               9443,
 		LeaderElection:     enableLeaderElection,
 		LeaderElectionID:   "openshift-cluster-api-operator",
+		SyncPeriod:         &syncPeriod,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -69,6 +77,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AWSCluster")
+		os.Exit(1)
+	}
+	if err = (&controllers.CAPIDeploymentReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("CAPIDeployment"),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CAPIDeployment")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

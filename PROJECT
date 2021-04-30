@@ -1,3 +1,7 @@
-domain: my.domain
+domain: openshift.io
 repo: github.com/cloud-team-poc/openshift-cluster-api-operator
+resources:
+- group: capi
+  kind: CAPIDeployment
+  version: v1
 version: "2"
