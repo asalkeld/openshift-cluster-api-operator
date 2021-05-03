@@ -23,11 +23,14 @@ import (
 	operatorv1 "github.com/cloud-team-poc/openshift-cluster-api-operator/api/v1"
 	"github.com/go-logr/logr"
 	configv1 "github.com/openshift/api/config/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	k8sutilspointer "k8s.io/utils/pointer"
 	infrav1 "sigs.k8s.io/cluster-api-provider-aws/api/v1alpha3"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -73,7 +76,7 @@ func (r *CAPIDeploymentReconciler) Reconcile(req ctrl.Request) (ctrl.Result, err
 	// Reconcile the CAPI Cluster resource
 	capiCluster := CAPICluster(infra.ClusterName, capiDeployment.Namespace)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, capiCluster, func() error {
-		return reconcileCAPICluster(capiCluster, infra.ClusterName, capiDeployment.Namespace)
+		return r.reconcileCAPICluster(capiCluster, infra.ClusterName, capiDeployment.Namespace)
 	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile capi cluster: %w", err)
@@ -85,11 +88,17 @@ func (r *CAPIDeploymentReconciler) Reconcile(req ctrl.Request) (ctrl.Result, err
 		return ctrl.Result{}, fmt.Errorf("region can't be nil, something went wrong")
 	}
 
-	capaCluster := CAPACluster(infra.ClusterName, capiDeployment.Namespace, region)
-	if err := r.Client.Create(ctx, capaCluster); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{}, err
-		}
+	capaCluster := CAPACluster(infra.ClusterName, capiDeployment.Namespace)
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, capiCluster, func() error {
+		return r.reconcileCAPACluster(capaCluster, region)
+	})
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile capa cluster: %w", err)
+	}
+
+	err = r.reconcileCAPIComponents(ctx, capiDeployment.Namespace)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile capi components: %w", err)
 	}
 
 	return ctrl.Result{}, nil
@@ -118,12 +127,7 @@ func CAPICluster(name, namespace string) *clusterv1.Cluster {
 	}
 }
 
-func reconcileCAPICluster(cluster *clusterv1.Cluster, infraName, infraNamespace string) error {
-	// We only create this resource once and then let CAPI own it
-	if !cluster.CreationTimestamp.IsZero() {
-		return nil
-	}
-
+func (r *CAPIDeploymentReconciler) reconcileCAPICluster(cluster *clusterv1.Cluster, infraName, infraNamespace string) error {
 	cluster.Spec = clusterv1.ClusterSpec{
 		InfrastructureRef: &corev1.ObjectReference{
 			APIVersion: "infrastructure.cluster.x-k8s.io/v1alpha3",
@@ -136,15 +140,112 @@ func reconcileCAPICluster(cluster *clusterv1.Cluster, infraName, infraNamespace 
 	return nil
 }
 
-func CAPACluster(name, namespace, region string) *infrav1.AWSCluster {
+func CAPACluster(name, namespace string) *infrav1.AWSCluster {
 	return &infrav1.AWSCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   namespace,
 			Name:        name,
 			Annotations: map[string]string{"cluster.x-k8s.io/managed-by": ""},
 		},
-		Spec: infrav1.AWSClusterSpec{
-			Region: region,
+	}
+}
+
+func (r *CAPIDeploymentReconciler) reconcileCAPACluster(awsCluster *infrav1.AWSCluster, region string) error {
+	awsCluster.Annotations = map[string]string{"cluster.x-k8s.io/managed-by": ""}
+	awsCluster.Spec = infrav1.AWSClusterSpec{
+		Region: region,
+	}
+
+	return nil
+}
+
+func CAPIManagerClusterRoleBinding() *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "cluster-api",
 		},
 	}
+}
+
+func reconcileCAPIManagerClusterRoleBinding(binding *rbacv1.ClusterRoleBinding, namespace string) error {
+	binding.Subjects = []rbacv1.Subject{
+		{
+			Kind:      "ServiceAccount",
+			Name:      "default",
+			Namespace: namespace,
+		},
+	}
+	return nil
+}
+
+func ClusterAPIManagerDeployment(namespace string) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      "capi-controller-manager",
+		},
+	}
+}
+
+func reconcileCAPIManagerDeployment(deployment *appsv1.Deployment, image string) error {
+	deployment.Spec = appsv1.DeploymentSpec{
+		Replicas: k8sutilspointer.Int32Ptr(1),
+		Selector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				"name": "cluster-api",
+			},
+		},
+		Template: corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					"name": "cluster-api",
+				},
+			},
+			Spec: corev1.PodSpec{
+				ServiceAccountName: "default",
+				Containers: []corev1.Container{
+					{
+						Name:            "manager",
+						Image:           image,
+						ImagePullPolicy: corev1.PullAlways,
+						Env: []corev1.EnvVar{
+							{
+								Name: "MY_NAMESPACE",
+								ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{
+										FieldPath: "metadata.namespace",
+									},
+								},
+							},
+						},
+						Command: []string{"/manager"},
+						Args:    []string{"--namespace", "$(MY_NAMESPACE)", "--alsologtostderr", "--v=4"},
+					},
+				},
+			},
+		},
+	}
+	return nil
+}
+
+func (r *CAPIDeploymentReconciler) reconcileCAPIComponents(ctx context.Context, namespace string) error {
+	clusterRoleBinding := CAPIManagerClusterRoleBinding()
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, clusterRoleBinding, func() error {
+		return reconcileCAPIManagerClusterRoleBinding(clusterRoleBinding, namespace)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reconcile capi manager cluster role binding: %w", err)
+	}
+
+	deployment := ClusterAPIManagerDeployment(namespace)
+
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+		return reconcileCAPIManagerDeployment(deployment, "us.gcr.io/k8s-artifacts-prod/cluster-api/cluster-api-controller:v0.3.12")
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reconcile capi manager cluster role binding: %w", err)
+	}
+
+	return nil
 }
