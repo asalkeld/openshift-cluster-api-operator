@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	k8sutilspointer "k8s.io/utils/pointer"
 	infrav1 "sigs.k8s.io/cluster-api-provider-aws/api/v1alpha3"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
@@ -97,6 +98,11 @@ func (r *CAPIDeploymentReconciler) Reconcile(req ctrl.Request) (ctrl.Result, err
 	}
 
 	err = r.reconcileCAPIComponents(ctx, capiDeployment.Namespace)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile capi components: %w", err)
+	}
+
+	err = r.reconcileCAPAComponents(ctx, capiDeployment.Namespace)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile capi components: %w", err)
 	}
@@ -244,7 +250,149 @@ func (r *CAPIDeploymentReconciler) reconcileCAPIComponents(ctx context.Context, 
 		return reconcileCAPIManagerDeployment(deployment, "us.gcr.io/k8s-artifacts-prod/cluster-api/cluster-api-controller:v0.3.12")
 	})
 	if err != nil {
+		return fmt.Errorf("failed to reconcile capi manager deployment: %w", err)
+	}
+
+	return nil
+}
+
+func CAPAManagerClusterRoleBinding() *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "cluster-api-aws",
+		},
+	}
+}
+
+func reconcileCAPAManagerClusterRoleBinding(binding *rbacv1.ClusterRoleBinding, namespace string) error {
+	binding.Subjects = []rbacv1.Subject{
+		{
+			Kind:      "ServiceAccount",
+			Name:      "default",
+			Namespace: namespace,
+		},
+	}
+	return nil
+}
+
+func ClusterAPIAWSManagerDeployment(namespace string) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      "capa-controller-manager",
+		},
+	}
+}
+
+func reconcileCAPIAWSProviderDeployment(deployment *appsv1.Deployment, image string) error {
+	deployment.Spec = appsv1.DeploymentSpec{
+		Replicas: k8sutilspointer.Int32Ptr(1),
+		Selector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				"control-plane": "capa-controller-manager",
+			},
+		},
+		Template: corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					"control-plane": "capa-controller-manager",
+				},
+			},
+			Spec: corev1.PodSpec{
+				ServiceAccountName:            "default",
+				TerminationGracePeriodSeconds: k8sutilspointer.Int64Ptr(10),
+				Tolerations: []corev1.Toleration{
+					{
+						Key:    "node-role.kubernetes.io/master",
+						Effect: corev1.TaintEffectNoSchedule,
+					},
+				},
+				Volumes: []corev1.Volume{
+					{
+						Name: "credentials",
+						VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{
+								SecretName: "capa-manager-bootstrap-credentials",
+							},
+						},
+					},
+				},
+				Containers: []corev1.Container{
+					{
+						Name:            "manager",
+						Image:           image,
+						ImagePullPolicy: corev1.PullAlways,
+						VolumeMounts: []corev1.VolumeMount{
+							{
+								Name:      "credentials",
+								MountPath: "/home/.aws",
+							},
+						},
+						Env: []corev1.EnvVar{
+							{
+								Name: "MY_NAMESPACE",
+								ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{
+										FieldPath: "metadata.namespace",
+									},
+								},
+							},
+							{
+								Name:  "AWS_SHARED_CREDENTIALS_FILE",
+								Value: "/home/.aws/credentials",
+							},
+						},
+						Command: []string{"/manager"},
+						Args:    []string{"--namespace", "$(MY_NAMESPACE)", "--alsologtostderr", "--v=4"},
+						Ports: []corev1.ContainerPort{
+							{
+								Name:          "healthz",
+								ContainerPort: 9440,
+								Protocol:      corev1.ProtocolTCP,
+							},
+						},
+						LivenessProbe: &corev1.Probe{
+							Handler: corev1.Handler{
+								HTTPGet: &corev1.HTTPGetAction{
+									Path: "/healthz",
+									Port: intstr.FromString("healthz"),
+								},
+							},
+						},
+						ReadinessProbe: &corev1.Probe{
+							Handler: corev1.Handler{
+								HTTPGet: &corev1.HTTPGetAction{
+									Path: "/readyz",
+									Port: intstr.FromString("healthz"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return nil
+}
+
+func (r *CAPIDeploymentReconciler) reconcileCAPAComponents(ctx context.Context, namespace string) error {
+	clusterRoleBinding := CAPAManagerClusterRoleBinding()
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, clusterRoleBinding, func() error {
+		return reconcileCAPAManagerClusterRoleBinding(clusterRoleBinding, namespace)
+	})
+	if err != nil {
 		return fmt.Errorf("failed to reconcile capi manager cluster role binding: %w", err)
+	}
+
+	deployment := ClusterAPIAWSManagerDeployment(namespace)
+
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+		return reconcileCAPIAWSProviderDeployment(deployment, "quay.io/ademicev/cluster-api-aws-controller-amd64:dev")
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reconcile capa manager deployment: %w", err)
 	}
 
 	return nil
