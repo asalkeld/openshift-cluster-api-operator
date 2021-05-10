@@ -75,9 +75,9 @@ func (r *CAPIDeploymentReconciler) Reconcile(req ctrl.Request) (ctrl.Result, err
 	}
 
 	// Reconcile the CAPI Cluster resource
-	capiCluster := CAPICluster(infra.ClusterName, capiDeployment.Namespace)
+	capiCluster := CAPICluster(capiDeployment.Name, capiDeployment.Namespace)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, capiCluster, func() error {
-		return r.reconcileCAPICluster(capiCluster, infra.ClusterName, capiDeployment.Namespace)
+		return r.reconcileCAPICluster(capiCluster, capiDeployment.Name, capiDeployment.Namespace)
 	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile capi cluster: %w", err)
@@ -89,8 +89,8 @@ func (r *CAPIDeploymentReconciler) Reconcile(req ctrl.Request) (ctrl.Result, err
 		return ctrl.Result{}, fmt.Errorf("region can't be nil, something went wrong")
 	}
 
-	capaCluster := CAPACluster(infra.ClusterName, capiDeployment.Namespace)
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, capiCluster, func() error {
+	capaCluster := CAPACluster(capiDeployment.Name, capiDeployment.Namespace)
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, capaCluster, func() error {
 		return r.reconcileCAPACluster(capaCluster, region)
 	})
 	if err != nil {
@@ -180,6 +180,11 @@ func reconcileCAPIManagerClusterRoleBinding(binding *rbacv1.ClusterRoleBinding, 
 			Name:      "default",
 			Namespace: namespace,
 		},
+	}
+	binding.RoleRef = rbacv1.RoleRef{
+		APIGroup: "rbac.authorization.k8s.io",
+		Kind:     "ClusterRole",
+		Name:     "cluster-admin",
 	}
 	return nil
 }
@@ -271,6 +276,11 @@ func reconcileCAPAManagerClusterRoleBinding(binding *rbacv1.ClusterRoleBinding, 
 			Name:      "default",
 			Namespace: namespace,
 		},
+	}
+	binding.RoleRef = rbacv1.RoleRef{
+		APIGroup: "rbac.authorization.k8s.io",
+		Kind:     "ClusterRole",
+		Name:     "cluster-admin",
 	}
 	return nil
 }
