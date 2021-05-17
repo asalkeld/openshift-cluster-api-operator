@@ -17,22 +17,28 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"time"
 
-	capiv1 "github.com/cloud-team-poc/openshift-cluster-api-operator/api/v1"
-	"github.com/cloud-team-poc/openshift-cluster-api-operator/controllers"
-
-	configv1 "github.com/openshift/api/config/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	infrav1 "sigs.k8s.io/cluster-api-provider-aws/api/v1alpha3"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
 	// +kubebuilder:scaffold:imports
+	capiv1 "github.com/cloud-team-poc/openshift-cluster-api-operator/api/v1"
+	"github.com/cloud-team-poc/openshift-cluster-api-operator/controllers"
+	certmanager "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1alpha2"
+	"github.com/openshift/api"
+	configv1 "github.com/openshift/api/config/v1"
+	osclientset "github.com/openshift/client-go/config/clientset/versioned"
 )
 
 var (
@@ -42,12 +48,14 @@ var (
 )
 
 func init() {
-	_ = clientgoscheme.AddToScheme(scheme)
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(api.InstallKube(scheme))
+	utilruntime.Must(capiv1.AddToScheme(scheme))
+	utilruntime.Must(configv1.AddToScheme(scheme))
+	utilruntime.Must(infrav1.AddToScheme(scheme))
+	utilruntime.Must(clusterv1.AddToScheme(scheme))
+	utilruntime.Must(certmanager.AddToScheme(scheme))
 
-	_ = capiv1.AddToScheme(scheme)
-	_ = configv1.AddToScheme(scheme)
-	_ = infrav1.AddToScheme(scheme)
-	_ = clusterv1.AddToScheme(scheme)
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -75,14 +83,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controllers.AWSClusterReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("AWSCluster"),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "AWSCluster")
-		os.Exit(1)
-	}
 	if err = (&controllers.CAPIDeploymentReconciler{
 		Client: mgr.GetClient(),
 		Log:    ctrl.Log.WithName("controllers").WithName("CAPIDeployment"),
@@ -90,6 +90,29 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CAPIDeployment")
 		os.Exit(1)
+	}
+
+	osClient, err := osclientset.NewForConfig(ctrl.GetConfigOrDie())
+	if err != nil {
+		setupLog.Error(err, "unable to create client", "controller", "CAPIDeployment")
+		os.Exit(1)
+	}
+
+	infra, err := osClient.ConfigV1().Infrastructures().Get(context.TODO(), "cluster", metav1.GetOptions{})
+	if err != nil {
+		setupLog.Error(err, "failed to get infrastructure object")
+		os.Exit(1)
+	}
+	if infra.Status.PlatformStatus.Type == "AWS" {
+		// AWSCluster CRD is not created on other platforms (yet)
+		if err = (&controllers.AWSClusterReconciler{
+			Client: mgr.GetClient(),
+			Log:    ctrl.Log.WithName("controllers").WithName("AWSCluster"),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "AWSCluster")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

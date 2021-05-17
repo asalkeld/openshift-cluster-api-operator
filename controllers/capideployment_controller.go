@@ -51,8 +51,7 @@ const (
 // +kubebuilder:rbac:groups=capi.openshift.io,resources=capideployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=capi.openshift.io,resources=capideployments/status,verbs=get;update;patch
 
-func (r *CAPIDeploymentReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx := context.Background()
+func (r *CAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = r.Log.WithValues("capideployment", req.NamespacedName)
 
 	capiDeployment := &operatorv1.CAPIDeployment{}

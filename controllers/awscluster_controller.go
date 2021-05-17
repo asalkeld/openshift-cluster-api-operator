@@ -34,8 +34,7 @@ type AWSClusterReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-func (r *AWSClusterReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx := context.Background()
+func (r *AWSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("AWSCluster", req.NamespacedName)
 
 	awsCluster := &infrav1.AWSCluster{}
