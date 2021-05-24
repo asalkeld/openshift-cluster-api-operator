@@ -11,18 +11,18 @@ rules:
   resources:
   - capideployments
   verbs:
+  - create
+  - delete
   - get
   - list
-  - watch
-  - create
-  - update
   - patch
-  - delete
+  - update
+  - watch
 - apiGroups:
   - capi.openshift.io
   resources:
   - capideployments/status
   verbs:
   - get
-  - update
   - patch
+  - update
